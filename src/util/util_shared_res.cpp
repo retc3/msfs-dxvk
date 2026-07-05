@@ -3,6 +3,7 @@
 
 #ifdef _WIN32
 #include <winioctl.h>
+#include <cstdio>
 #endif
 
 namespace dxvk {
@@ -31,20 +32,68 @@ namespace dxvk {
   }
 
   #define IOCTL_SHARED_GPU_RESOURCE_SET_METADATA           CTL_CODE(FILE_DEVICE_VIDEO, 4, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+  #define IOCTL_SHARED_GPU_RESOURCE_GET_METADATA           CTL_CODE(FILE_DEVICE_VIDEO, 5, METHOD_BUFFERED, FILE_READ_ACCESS)
+
+  // native-windows fallback transport for the dxvk<->vkd3d shared-texture
+  // metadata. \\.\SharedGpuResource only exists under wine, so on native
+  // windows the ioctls fail and the decoded-video texture metadata never
+  // reaches vkd3d (audio-only video in msfs). stash it in a temp file keyed by
+  // the raw shared-handle value; vkd3d-proton uses the identical scheme.
+  static void sharedMetadataNativePath(HANDLE handle, char *path, size_t size) {
+    char tmp[MAX_PATH];
+    DWORD n = ::GetTempPathA(sizeof(tmp), tmp);
+    if (!n || n >= sizeof(tmp)) { path[0] = '\0'; return; }
+    snprintf(path, size, "%svkd3d-dxvk-shared-%llx.bin", tmp, (unsigned long long)(uintptr_t)handle);
+  }
+
+  static bool setSharedMetadataNative(HANDLE handle, void *buf, uint32_t bufSize) {
+    char path[MAX_PATH];
+    sharedMetadataNativePath(handle, path, sizeof(path));
+    if (!path[0])
+      return false;
+    HANDLE file = ::CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, NULL);
+    if (file == INVALID_HANDLE_VALUE)
+      return false;
+    DWORD written = 0;
+    bool ret = ::WriteFile(file, buf, bufSize, &written, NULL) && written == bufSize;
+    ::CloseHandle(file);
+    return ret;
+  }
+
+  static bool getSharedMetadataNative(HANDLE handle, void *buf, uint32_t bufSize, uint32_t *metadataSize) {
+    char path[MAX_PATH];
+    sharedMetadataNativePath(handle, path, sizeof(path));
+    if (!path[0])
+      return false;
+    HANDLE file = ::CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE)
+      return false;
+    DWORD readBytes = 0;
+    bool ret = ::ReadFile(file, buf, bufSize, &readBytes, NULL) && readBytes > 0;
+    ::CloseHandle(file);
+    if (metadataSize)
+      *metadataSize = readBytes;
+    return ret;
+  }
 
   bool setSharedMetadata(HANDLE handle, void *buf, uint32_t bufSize) {
     DWORD retSize;
-    return ::DeviceIoControl(handle, IOCTL_SHARED_GPU_RESOURCE_SET_METADATA, buf, bufSize, NULL, 0, &retSize, NULL);
+    if (::DeviceIoControl(handle, IOCTL_SHARED_GPU_RESOURCE_SET_METADATA, buf, bufSize, NULL, 0, &retSize, NULL))
+      return true;
+    // wine device absent -> native windows fallback
+    return setSharedMetadataNative(handle, buf, bufSize);
   }
-
-  #define IOCTL_SHARED_GPU_RESOURCE_GET_METADATA           CTL_CODE(FILE_DEVICE_VIDEO, 5, METHOD_BUFFERED, FILE_READ_ACCESS)
 
   bool getSharedMetadata(HANDLE handle, void *buf, uint32_t bufSize, uint32_t *metadataSize) {
     DWORD retSize;
     bool ret = ::DeviceIoControl(handle, IOCTL_SHARED_GPU_RESOURCE_GET_METADATA, NULL, 0, buf, bufSize, &retSize, NULL);
-    if (metadataSize)
-      *metadataSize = retSize;
-    return ret;
+    if (ret) {
+      if (metadataSize)
+        *metadataSize = retSize;
+      return true;
+    }
+    // wine device absent -> native windows fallback
+    return getSharedMetadataNative(handle, buf, bufSize, metadataSize);
   }
 #else
   HANDLE openKmtHandle(HANDLE kmt_handle) {

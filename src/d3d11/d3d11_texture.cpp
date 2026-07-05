@@ -799,11 +799,21 @@ namespace dxvk {
     /* try the legacy Proton shared resource implementation */
 
     HANDLE hSharedHandle;
+    bool ownsHandle = false;
 
-    if (m_desc.MiscFlags & D3D11_RESOURCE_MISC_SHARED_NTHANDLE)
+    if (m_desc.MiscFlags & D3D11_RESOURCE_MISC_SHARED_NTHANDLE) {
       hSharedHandle = m_image->sharedHandle();
-    else
+    } else {
       hSharedHandle = openKmtHandle( m_image->sharedHandle() );
+      if (hSharedHandle != INVALID_HANDLE_VALUE) {
+        ownsHandle = true;
+      } else {
+        // native windows: no \\.\SharedGpuResource to convert the KMT handle.
+        // key metadata by the raw shared handle, matching vkd3d-proton's native
+        // fallback so the decoded-video texture crosses to D3D12.
+        hSharedHandle = m_image->sharedHandle();
+      }
+    }
 
     DxvkSharedTextureMetadata metadata;
 
@@ -823,7 +833,7 @@ namespace dxvk {
       Logger::warn("D3D11: Failed to write shared resource info for a texture");
     }
 
-    if (hSharedHandle != INVALID_HANDLE_VALUE)
+    if (ownsHandle)
       CloseHandle(hSharedHandle);
   }
   
