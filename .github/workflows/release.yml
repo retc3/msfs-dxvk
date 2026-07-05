@@ -47,5 +47,5 @@ jobs:
         with:
           name: dxvk ${{ steps.version.outputs.version }} (msfs)
           files: build/dxvk-${{ steps.version.outputs.version }}.tar.gz
-          draft: true
+          draft: false
           generate_release_notes: true
