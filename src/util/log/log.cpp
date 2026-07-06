@@ -1,11 +1,58 @@
 #include <utility>
+#include <cstdio>
+#include <cstring>
 
 #include "log.h"
 
 #include "../util_env.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace dxvk {
-  
+
+  // MSFS tailored: env-var-free debug trigger. MSFS is a Store/launcher app and
+  // won't pass DXVK_LOG_LEVEL / DXVK_LOG_PATH. The msfs-vulkan launcher drops a
+  // file next to the game exe: msfs-vulkan-debug.conf with a line
+  //   log_dir=<absolute path>
+  // When present we force full trace logging into log_dir/dxvk.log. vkd3d-proton
+  // reads the same file. Returns the log_dir (empty if not present).
+  static std::string msfsDebugLogDir() {
+#ifdef _WIN32
+    char exePath[MAX_PATH];
+    if (!GetModuleFileNameA(nullptr, exePath, sizeof(exePath)))
+      return std::string();
+
+    char* sep = std::strrchr(exePath, '\\');
+    if (!sep)
+      return std::string();
+    *sep = '\0';
+
+    std::string confPath = std::string(exePath) + "\\msfs-vulkan-debug.conf";
+    FILE* conf = std::fopen(confPath.c_str(), "r");
+    if (!conf)
+      return std::string();
+
+    std::string result;
+    char line[1024];
+    while (std::fgets(line, sizeof(line), conf)) {
+      if (std::strncmp(line, "log_dir=", 8) != 0)
+        continue;
+      char* nl = std::strpbrk(line + 8, "\r\n");
+      if (nl)
+        *nl = '\0';
+      if (line[8])
+        result = line + 8;
+      break;
+    }
+    std::fclose(conf);
+    return result;
+#else
+    return std::string();
+#endif
+  }
+
   Logger::Logger(const std::string& fileName)
   : m_minLevel(getMinLogLevel()), m_fileName(fileName) {
 
@@ -123,7 +170,17 @@ namespace dxvk {
   
   std::string Logger::getFileName(const std::string& base) {
     std::string path = env::getEnvVar("DXVK_LOG_PATH");
-    
+
+    // MSFS tailored: if no env path was set, log into the launcher's dir.
+    if (path.empty()) {
+      std::string msfsDir = msfsDebugLogDir();
+      if (!msfsDir.empty()) {
+        if (*msfsDir.rbegin() != '/' && *msfsDir.rbegin() != '\\')
+          msfsDir += '\\';
+        return msfsDir + "dxvk.log";
+      }
+    }
+
     if (path == "none")
       return std::string();
 
@@ -153,12 +210,16 @@ namespace dxvk {
     }};
     
     const std::string logLevelStr = env::getEnvVar("DXVK_LOG_LEVEL");
-    
+
     for (const auto& pair : logLevels) {
       if (logLevelStr == pair.first)
         return pair.second;
     }
-    
+
+    // MSFS tailored: env-var-free debug trigger forces full logging.
+    if (logLevelStr.empty() && !msfsDebugLogDir().empty())
+      return LogLevel::Trace;
+
     return LogLevel::Info;
   }
   
