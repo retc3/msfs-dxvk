@@ -9,3 +9,11 @@ native fallback writes the metadata to a temp file keyed by the raw shared handl
 file name is tempdir then vkd3d-dxvk-shared then handle in hex then bin
 struct dxvksharedtexturemetadata must stay identical in dxvk and vkd3d
 both repos must use the same file name and the same struct or it breaks
+
+env free debug logging
+msfs blocks env vars so we cannot set dxvk log level or dxvk log path
+the launcher writes msfs-vulkan-debug.conf next to the game exe
+it contains one line log_dir= then an absolute path
+when present dxvk forces full trace logging into log_dir then dxvk.log
+vkd3d reads the same conf and writes log_dir then vkd3d.log
+launcher makes the dir as logs then unixtime
