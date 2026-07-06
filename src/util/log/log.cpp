@@ -172,12 +172,14 @@ namespace dxvk {
     std::string path = env::getEnvVar("DXVK_LOG_PATH");
 
     // MSFS tailored: if no env path was set, log into the launcher's dir.
+    // Keep the per-DLL base name (d3d11.log, dxgi.log, ...) - multiple dxvk
+    // DLLs live in one process and would otherwise fight over a single file.
     if (path.empty()) {
       std::string msfsDir = msfsDebugLogDir();
       if (!msfsDir.empty()) {
         if (*msfsDir.rbegin() != '/' && *msfsDir.rbegin() != '\\')
           msfsDir += '\\';
-        return msfsDir + "dxvk.log";
+        return msfsDir + base;
       }
     }
 
